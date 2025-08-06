@@ -6,67 +6,64 @@ import json
 import time
 import os
 from collections import defaultdict
+from typing import Dict, List, Optional, Union, Any, Tuple
 from .security import AuthManager
+
 
 class VirtualFDWManager:
     def __init__(self):
+        """Инициализация менеджера виртуальных FDW подключений."""
         self.connection_params = {}
-        self.schema_mapping = {}
-        self.table_mapping = {}  # Новый словарь для маппинга таблиц
-        self.join_config = []    # Конфигурация JOIN
-        self.connections = {}
-        self.log_messages = []  # Для хранения сообщений
+        self.table_mapping = {}  # Маппинг таблиц на подключения
+        self.join_config = []    # Конфигурация JOIN между таблицами
+        self.connections = {}    # Активные подключения
+        self.log_messages = []   # Лог сообщений
         self.saved_credentials = {}
         self.load_env_config()
 
-    def log(self, message, error=False):
-        """Логирование сообщений"""
+    def log(self, message: str, error: bool = False) -> None:
+        """Логирование сообщений."""
         prefix = "[ERROR] " if error else "[INFO] "
         full_message = prefix + message
-        print(full_message)  # Вывод в консоль
-        self.log_messages.append(full_message)  # Сохранение для GUI
+        print(full_message)
+        self.log_messages.append(full_message)
 
-    def load_env_config(self):
-        """Загрузка конфигурации из .env файла"""
+    def load_env_config(self) -> None:
+        """Загрузка конфигурации из .env файла."""
         try:
             env_path = os.path.abspath('.env')
-            print(f"Загружаем конфигурацию из файла: {env_path}")
+            self.log(f"Загружаем конфигурацию из файла: {env_path}")
             
             # Создаем файл, если он не существует
             if not os.path.exists(env_path):
                 with open(env_path, 'w') as f:
                     f.write("CONNECTIONS={}\nTABLE_MAPPINGS={}\nJOIN_CONFIG=[]\n")
             
-            # Перезагружаем переменные окружения
             load_dotenv(env_path, override=True)
             
             # Загрузка подключений
-            connections_json = os.getenv("CONNECTIONS", "{}")
-            self.connection_params = json.loads(connections_json)
-            print(f"Загружены подключения: {self.connection_params}")
+            self.connection_params = json.loads(os.getenv("CONNECTIONS", "{}"))
+            self.log(f"Загружены подключения: {self.connection_params}")
             
-            # Загрузка маппинга таблиц (новый формат)
-            table_mappings_json = os.getenv("TABLE_MAPPINGS", "{}")
-            self.table_mapping = json.loads(table_mappings_json)
-            print(f"Загружен маппинг таблиц: {self.table_mapping}")
+            # Загрузка маппинга таблиц
+            self.table_mapping = json.loads(os.getenv("TABLE_MAPPINGS", "{}"))
+            self.log(f"Загружен маппинг таблиц: {self.table_mapping}")
             
             # Загрузка конфигурации JOIN
-            join_config_json = os.getenv("JOIN_CONFIG", "[]")
-            self.join_config = json.loads(join_config_json)
-            print(f"Загружены правила JOIN: {self.join_config}")
+            self.join_config = json.loads(os.getenv("JOIN_CONFIG", "[]"))
+            self.log(f"Загружены правила JOIN: {self.join_config}")
             
         except Exception as e:
-            print(f"Ошибка загрузки конфигурации: {str(e)}")
-            # Создаем пустые структуры
+            self.log(f"Ошибка загрузки конфигурации: {str(e)}", error=True)
             self.connection_params = {}
             self.table_mapping = {}
             self.join_config = []
     
-    def save_env_config(self):
-        """Сохранение конфигурации в .env файл"""
+    def save_env_config(self) -> None:
+        """Сохранение конфигурации в .env файл."""
         try:
             env_path = os.path.abspath('.env')
-            print(f"Сохраняем конфигурацию в файл: {env_path}")
+            self.log(f"Сохраняем конфигурацию в файл: {env_path}")
             
             # Читаем текущее содержимое файла
             current_content = {}
@@ -87,23 +84,75 @@ class VirtualFDWManager:
                 for key, value in current_content.items():
                     f.write(f"{key}={value}\n")
             
-            print(f"Успешно сохранено: CONNECTIONS={current_content['CONNECTIONS']}")
-            print(f"Успешно сохранено: TABLE_MAPPINGS={current_content['TABLE_MAPPINGS']}")
-            print(f"Успешно сохранено: JOIN_CONFIG={current_content['JOIN_CONFIG']}")
+            self.log(f"Успешно сохранено: CONNECTIONS={current_content['CONNECTIONS']}")
+            self.log(f"Успешно сохранено: TABLE_MAPPINGS={current_content['TABLE_MAPPINGS']}")
+            self.log(f"Успешно сохранено: JOIN_CONFIG={current_content['JOIN_CONFIG']}")
         except Exception as e:
-            print(f"Критическая ошибка при сохранении в .env: {str(e)}")
+            self.log(f"Критическая ошибка при сохранении в .env: {str(e)}", error=True)
             raise
 
-    def _validate_join_rule(self, rule):
-        if not isinstance(rule.get('join_type', 'inner'), str):
-            rule['join_type'] = 'inner'
-        return rule
+    def add_connection(self, name: str, params: Dict[str, str]) -> None:
+        """Добавление нового подключения."""
+        required = ['host', 'port', 'dbname']
+        if not all(k in params for k in required):
+            raise ValueError(f"Необходимые параметры: {', '.join(required)}")
+        
+        self.connection_params[name] = params
+        self.save_env_config()
+        self.log(f"Добавлено новое подключение: {name}")
 
-    def get_connection(self, key, user=None, password=None):
+    def remove_connection(self, name: str) -> None:
+        """Удаление подключения."""
+        if name in self.connection_params:
+            del self.connection_params[name]
+            self.save_env_config()
+            self.log(f"Удалено подключение: {name}")
+        else:
+            self.log(f"Подключение {name} не найдено", error=True)
+
+    def map_table(self, table: str, connection: str) -> None:
+        """Сопоставление таблицы с подключением."""
+        if connection not in self.connection_params:
+            raise ValueError(f"Подключение {connection} не существует")
+            
+        self.table_mapping[table] = connection
+        self.save_env_config()
+        self.log(f"Таблица {table} сопоставлена с подключением {connection}")
+
+    def add_join_rule(self, tables: List[str], key: str, join_type: str = 'inner') -> None:
+        """Добавление правила JOIN между таблицами."""
+        if len(tables) < 2:
+            raise ValueError("Необходимо указать минимум 2 таблицы")
+        
+        # Проверяем, что все таблицы есть в маппинге
+        for table in tables:
+            if table not in self.table_mapping:
+                raise ValueError(f"Таблица {table} не найдена в маппинге")
+        
+        self.join_config.append({
+            'tables': tables,
+            'key': key,
+            'join_type': join_type,
+            'execute_in_db': False  # По умолчанию JOIN выполняется на стороне клиента
+        })
+        self.save_env_config()
+        self.log(f"Добавлено правило JOIN для таблиц {', '.join(tables)} по ключу {key}")
+
+    def set_join_execution(self, rule_index: int, execute_in_db: bool) -> None:
+        """Установка места выполнения JOIN (БД или клиент)."""
+        if 0 <= rule_index < len(self.join_config):
+            self.join_config[rule_index]['execute_in_db'] = execute_in_db
+            self.save_env_config()
+            self.log(f"Правило JOIN #{rule_index} установлено на выполнение {'в БД' if execute_in_db else 'на клиенте'}")
+        else:
+            raise IndexError(f"Неверный индекс правила JOIN: {rule_index}")
+
+    def get_connection(self, key: str, user: Optional[str] = None, password: Optional[str] = None) -> psycopg2.extensions.connection:
+        """Получение подключения к БД."""
         if key not in self.connection_params:
             raise ValueError(f"Не найден ключ подключения: '{key}'")
         
-        # Всегда получаем учетные данные из AuthManager
+        # Получаем учетные данные из AuthManager
         stored_user, stored_password = AuthManager.get_credentials(key)
         
         # Используем переданные данные или сохраненные
@@ -117,21 +166,444 @@ class VirtualFDWManager:
             conn = psycopg2.connect(**params)
             conn.autocommit = True
             self.connections[key] = conn
+            self.log(f"Успешное подключение к {key}")
             return conn
         except Exception as e:
-            raise ConnectionError(f"Ошибка подключения к {key}: {str(e)}")
+            self.log(f"Ошибка подключения к {key}: {str(e)}", error=True)
+            raise ConnectionError(f"Ошибка подключения к {key}: {str(e)}") from e
 
-    def parse_sql(self, query):
-        """Надежный парсер SQL с поддержкой JOIN и сложных запросов"""
+    def execute_query(self, query: str) -> Tuple[pd.DataFrame, float]:
+        """Выполнение SQL запроса с поддержкой JOIN между разными БД."""
+        start_time = time.time()
+
+
+        # Разделяем запрос на отдельные команды
+        commands = [cmd.strip() for cmd in query.split(';') if cmd.strip()]
+        results = []
+        last_successful_result = pd.DataFrame()
+        
+        for cmd in commands:
+            try:
+                # Пропускаем пустые команды
+                if not cmd:
+                    continue
+                    
+                # Определяем тип команды
+                cmd_lower = cmd.lower().strip()
+                
+                if cmd_lower.startswith('select'):
+                    # Обработка SELECT запросов
+                    result, exec_time = self._execute_select(cmd)
+                    results.append(result)
+                    last_successful_result = result
+                    self.log(f"SELECT выполнен за {exec_time:.2f} сек. Найдено строк: {len(result)}")
+                    
+                elif cmd_lower.startswith(('insert', 'update', 'delete')):
+                    # Обработка DML команд
+                    affected_rows = self._execute_dml(cmd)
+                    results.append(pd.DataFrame({'affected_rows': [affected_rows]}))
+                    self.log(f"DML команда выполнена. Затронуто строк: {affected_rows}")
+                    
+                else:
+                    # Обработка других команд (CREATE, DROP и т.д.)
+                    self._execute_generic(cmd)
+                    results.append(pd.DataFrame({'status': ['success']}))
+                    self.log(f"Команда выполнена успешно")
+                    
+            except Exception as e:
+                error_msg = f"Ошибка выполнения команды: {str(e)}"
+                self.log(error_msg, error=True)
+                results.append(pd.DataFrame({'error': [error_msg]}))
+        
+        exec_time = time.time() - start_time
+        
+        
+        #обработаем первый селект
+        select_match = re.search(r"SELECT\s.+?FROM\s.+?;", query, re.IGNORECASE | re.DOTALL)
+        if select_match:
+            query = select_match.group(0)
+        
+        try:
+            # Парсинг SQL запроса
+            parsed = self.parse_sql(query)
+            self.log(f"Парсинг SQL завершен: {parsed}")
+            
+            # Определение таблиц и их подключений
+            table_info = self._resolve_table_mappings(parsed)
+            self.log(f"Определены подключения для таблиц: {table_info}")
+            
+            # Группировка таблиц по подключениям
+            conn_groups = self._group_tables_by_connection(table_info)
+            self.log(f"Таблицы сгруппированы по подключениям: {conn_groups}")
+            
+            # Загрузка данных с учетом JOIN внутри одного подключения
+            dfs = self._fetch_data(parsed, table_info, conn_groups)
+            self.log(f"Данные загружены для таблиц: {list(dfs.keys())}")
+            
+            # Объединение результатов из разных подключений
+            merged = self._merge_results(parsed, table_info, dfs)
+            self.log(f"Результаты объединены, строк: {len(merged)}")
+            
+            # Фильтрация результатов после объединения
+            if not merged.empty and parsed.get('where'):
+                merged = self._apply_global_where(merged, parsed['where'])
+                self.log(f"Применены условия WHERE, строк осталось: {len(merged)}")
+            
+            # Финализация результата
+            merged = merged.fillna('NULL').reset_index(drop=True)
+            
+            exec_time = time.time() - start_time
+            self.log(f"Запрос выполнен за {exec_time:.2f} сек.")
+            return merged, exec_time
+
+        except Exception as e:
+            exec_time = time.time() - start_time
+            error_msg = f"{str(e)} (Время выполнения: {exec_time:.2f} сек.)"
+            self.log(error_msg, error=True)
+            raise RuntimeError(error_msg) from e
+        finally:
+            self._close_connections()
+
+    def _resolve_table_mappings(self, parsed: Dict[str, Any]) -> Dict[str, Dict[str, str]]:
+        """Определение подключений для таблиц в запросе."""
+        table_info = {}
+        
+        for full_table in parsed['tables']:
+            # Поиск таблицы в маппинге
+            if full_table not in self.table_mapping:
+                # Поиск по имени таблицы без схемы
+                table_name_only = full_table.split('.')[-1]
+                candidates = [t for t in self.table_mapping.keys() if t.split('.')[-1] == table_name_only]
+                
+                if len(candidates) == 1:
+                    full_table = candidates[0]
+                elif len(candidates) > 1:
+                    raise ValueError(f"Неоднозначное соответствие для таблицы '{full_table}': найдено несколько таблиц в маппинге ({', '.join(candidates)}). Уточните схему.")
+                else:
+                    raise ValueError(f"Таблица '{full_table}' не найдена в маппинге")
+            
+            connection_name = self.table_mapping[full_table]
+            
+            # Разделяем на схему и таблицу
+            if '.' in full_table:
+                schema, table_name = full_table.split('.', 1)
+            else:
+                schema = 'public'
+                table_name = full_table
+            
+            # Определяем алиас
+            alias = next((a for a, t in parsed['aliases'].items() if t == full_table), None)
+            if alias is None:
+                alias = table_name
+            
+            table_info[full_table] = {
+                'connection': connection_name,
+                'schema': schema,
+                'table_name': table_name,
+                'alias': alias,
+                'columns': []
+            }
+        
+        return table_info
+
+    def _group_tables_by_connection(self, table_info: Dict[str, Dict[str, str]]) -> Dict[str, List[str]]:
+        """Группировка таблиц по подключениям."""
+        conn_groups = defaultdict(list)
+        for table, info in table_info.items():
+            conn_groups[info['connection']].append(table)
+        return conn_groups
+
+    def _fetch_data(self, parsed: Dict[str, Any], table_info: Dict[str, Dict[str, str]], 
+                   conn_groups: Dict[str, List[str]]) -> Dict[str, pd.DataFrame]:
+        """Загрузка данных из БД с учетом JOIN внутри одного подключения."""
+        dfs = {}
+        join_rules = self._get_applicable_join_rules(table_info)
+        
+        for conn_name, tables_in_conn in conn_groups.items():
+            # Проверяем, можно ли выполнить JOIN на стороне БД
+            db_join_possible = self._check_db_join_possible(tables_in_conn, join_rules)
+            
+            if db_join_possible:
+                # Выполняем JOIN на стороне БД
+                dfs.update(self._execute_db_join(parsed, table_info, conn_name, tables_in_conn, join_rules))
+            else:
+                # Выполняем отдельные запросы и JOIN на стороне клиента
+                dfs.update(self._execute_client_join(parsed, table_info, conn_name, tables_in_conn, join_rules))
+        
+        return dfs
+
+    def _check_db_join_possible(self, tables: List[str], join_rules: List[Dict[str, Any]]) -> bool:
+        """Проверяет, можно ли выполнить JOIN на стороне БД."""
+        if len(tables) == 1:
+            return False
+            
+        # Проверяем, есть ли правило JOIN для этих таблиц с execute_in_db=True
+        for rule in join_rules:
+            if set(tables).issubset(set(rule['tables'])) and rule.get('execute_in_db', False):
+                return True
+                
+        return False
+
+    def _execute_db_join(self, parsed: Dict[str, Any], table_info: Dict[str, Dict[str, str]], 
+                        conn_name: str, tables_in_conn: List[str], 
+                        join_rules: List[Dict[str, Any]]) -> Dict[str, pd.DataFrame]:
+        """Выполняет JOIN на стороне БД."""
+        dfs = {}
+        base_table = tables_in_conn[0]
+        base_info = table_info[base_table]
+        
+        # Формируем SELECT часть
+        select_parts = []
+        column_aliases = {}
+        for table in tables_in_conn:
+            info = table_info[table]
+            columns = self._get_columns_for_table(parsed['columns'], info['alias'], table)
+            if columns == ['*']:
+                select_parts.append(f"{info['alias']}.*")
+            else:
+                for col in columns:
+                    col_alias = f"{info['alias']}_{col}"
+                    select_parts.append(f"{info['alias']}.{col} AS {col_alias}")
+                    column_aliases[(info['alias'], col)] = col_alias
+        
+        # Формируем FROM и JOIN части
+        from_parts = [f"{base_info['schema']}.{base_info['table_name']} AS {base_info['alias']}"]
+        for table in tables_in_conn[1:]:
+            info = table_info[table]
+            from_parts.append(f"JOIN {info['schema']}.{info['table_name']} AS {info['alias']}")
+        
+        # Получаем условия JOIN из правил
+        join_conditions = []
+        for rule in join_rules:
+            if set(tables_in_conn).issubset(set(rule['tables'])) and rule.get('execute_in_db', False):
+                for i in range(1, len(rule['tables'])):
+                    if rule['tables'][i] in tables_in_conn:
+                        left_table = rule['tables'][0]
+                        right_table = rule['tables'][i]
+                        left_alias = table_info[left_table]['alias']
+                        right_alias = table_info[right_table]['alias']
+                        join_conditions.append(f"{left_alias}.{rule['key']} = {right_alias}.{rule['key']}")
+        
+        # Собираем полный запрос
+        sql = f"SELECT {', '.join(select_parts)} FROM {' '.join(from_parts)}"
+        if join_conditions:
+            sql += " ON " + " AND ".join(join_conditions)
+        
+        # Добавляем WHERE условия
+        where_conditions = []
+        for table in tables_in_conn:
+            info = table_info[table]
+            table_where = self._extract_table_where(parsed.get('where', ''), info['alias'])
+            if table_where:
+                where_conditions.append(table_where)
+        
+        if where_conditions:
+            sql += " WHERE " + " AND ".join(where_conditions)
+        
+        self.log(f"Выполняем JOIN-запрос в БД {conn_name}:\n{sql}")
+        
+        # Выполняем запрос
+        with self.get_connection(conn_name).cursor() as cur:
+            cur.execute(sql)
+            df_joined = pd.DataFrame(cur.fetchall(), columns=[desc[0] for desc in cur.description])
+        
+        # Разделяем результат на отдельные таблицы
+        for table in tables_in_conn:
+            info = table_info[table]
+            # Выбираем колонки относящиеся к текущей таблице
+            table_cols = []
+            if parsed['columns'] == ['*']:
+                prefix = info['alias'] + '_'
+                table_cols = [col for col in df_joined.columns if col.startswith(prefix)]
+            else:
+                table_cols = [column_aliases.get((info['alias'], col)) 
+                            for col in self._get_columns_for_table(parsed['columns'], info['alias'], table)
+                            if (info['alias'], col) in column_aliases]
+                table_cols = [col for col in table_cols if col]
+            
+            df_table = df_joined[table_cols].copy()
+            
+            # Убираем префикс алиаса из имен колонок
+            if not parsed['select_all']:
+                df_table.columns = [col.split('_', 1)[1] if '_' in col else col 
+                                for col in df_table.columns]
+            
+            # Добавляем префикс алиаса таблицы к именам колонок
+            df_table.columns = [f"{info['alias']}.{col}" for col in df_table.columns]
+            
+            dfs[table] = df_table
+            info['columns'] = df_table.columns.tolist()
+        
+        return dfs
+
+    def _execute_client_join(self, parsed: Dict[str, Any], table_info: Dict[str, Dict[str, str]], 
+                           conn_name: str, tables_in_conn: List[str], 
+                           join_rules: List[Dict[str, Any]]) -> Dict[str, pd.DataFrame]:
+        """Выполняет отдельные запросы и JOIN на стороне клиента."""
+        dfs = {}
+        
+        for full_table in tables_in_conn:
+            info = table_info[full_table]
+            
+            # Определяем условия WHERE для текущей таблицы
+            table_where = self._extract_table_where(parsed.get('where', ''), info['alias'])
+            
+            # Формируем SQL запрос
+            columns = self._get_columns_for_table(parsed['columns'], info['alias'], full_table)
+            cols = ', '.join(columns) if columns and columns != ['*'] else '*'
+            
+            sql = f"SELECT {cols} FROM {info['schema']}.{info['table_name']}"
+            
+            # Добавляем условия WHERE, если есть
+            conditions = []
+            if table_where:
+                conditions.append(table_where)
+            
+            # Добавляем JOIN условия для межсерверных соединений
+            join_params = []
+            join_key = None
+            for rule in join_rules:
+                if full_table in rule['tables']:
+                    for other_table in rule['tables']:
+                        if other_table != full_table and other_table in dfs:
+                            join_key = rule['key']
+                            other_info = table_info[other_table]
+                            other_df = dfs[other_table]
+                            
+                            other_col = f"{other_info['alias']}.{join_key}"
+                            if other_col in other_df.columns:
+                                values = other_df[other_col].unique()
+                                join_params.extend(values.tolist())
+            
+            # Если есть JOIN условия, добавляем их в запрос
+            if join_params and join_key:
+                join_condition = f"{info['alias']}.{join_key} IN %s"
+                conditions.append(join_condition)
+            
+            if conditions:
+                sql += " WHERE " + " AND ".join(conditions)
+            
+            self.log(f"Выполняем запрос к {full_table}: {sql}")
+            
+            # Выполняем запрос
+            with self.get_connection(info['connection']).cursor() as cur:
+                if join_params:
+                    params = (tuple(join_params),)
+                    cur.execute(sql, params)
+                else:
+                    cur.execute(sql)
+                
+                df = pd.DataFrame(cur.fetchall(), columns=[desc[0] for desc in cur.description])
+                # Добавляем префикс алиаса
+                df.columns = [f"{info['alias']}.{col}" for col in df.columns]
+                info['columns'] = df.columns.tolist()
+                dfs[full_table] = df
+        
+        return dfs
+
+    def _merge_results(self, parsed: Dict[str, Any], table_info: Dict[str, Dict[str, str]], 
+                      dfs: Dict[str, pd.DataFrame]) -> pd.DataFrame:
+        """Объединение результатов из разных подключений."""
+        if len(dfs) == 1:
+            return next(iter(dfs.values()))
+        
+        # Определяем порядок объединения (по порядку в FROM)
+        tables_ordered = [t for t in parsed['tables'] if t in dfs]
+        merged = dfs[tables_ordered[0]]
+        
+        for table in tables_ordered[1:]:
+            if table not in dfs:
+                continue
+                
+            # Формируем ключи для объединения
+            join_keys = self._get_join_keys(parsed, table_info, table, merged.columns)
+            
+            if join_keys:
+                self.log(f"Объединяем {table} по ключам: {join_keys}")
+                merged = pd.merge(
+                    merged,
+                    dfs[table],
+                    how='left',
+                    left_on=join_keys['left_keys'],
+                    right_on=join_keys['right_keys'],
+                    suffixes=('', '_DROP')
+                )
+                # Удаляем дублирующиеся колонки
+                drop_cols = [c for c in merged.columns if c.endswith('_DROP')]
+                if drop_cols:
+                    merged = merged.drop(columns=drop_cols)
+            else:
+                # Используем предварительно настроенные правила JOIN
+                join_found = False
+                for rule in self._get_applicable_join_rules(table_info):
+                    if table in rule['tables']:
+                        # Находим общую таблицу для JOIN
+                        common_tables = [t for t in rule['tables'] if t in dfs and t != table]
+                        if common_tables:
+                            common_table = common_tables[0]
+                            join_key = rule['key']
+                            
+                            left_keys = [f"{table_info[common_table]['alias']}.{join_key}"]
+                            right_keys = [f"{table_info[table]['alias']}.{join_key}"]
+                            
+                            # Проверяем наличие ключей в данных
+                            if (all(k in merged.columns for k in left_keys) and 
+                                all(k in dfs[table].columns for k in right_keys)):
+                                
+                                self.log(f"Объединяем {table} по правилу JOIN: {rule}")
+                                merged = pd.merge(
+                                    merged,
+                                    dfs[table],
+                                    how='left',
+                                    left_on=left_keys,
+                                    right_on=right_keys,
+                                    suffixes=('', '_DROP')
+                                )
+                                # Удаляем дублирующиеся колонки
+                                drop_cols = [c for c in merged.columns if c.endswith('_DROP')]
+                                if drop_cols:
+                                    merged = merged.drop(columns=drop_cols)
+                                join_found = True
+                                break
+                
+                if not join_found:
+                    self.log(f"Явных ключей JOIN для {table} не найдено, используем конкатенацию")
+                    merged = pd.concat([merged, dfs[table]], axis=1)
+        
+        return merged
+
+    def _apply_global_where(self, df: pd.DataFrame, where_clause: str) -> pd.DataFrame:
+        """Применение глобального условия WHERE после объединения."""
+        global_where = self._prepare_where_condition(where_clause, df.columns)
+        self.log(f"Применяем глобальное условие WHERE: {global_where}")
+        
+        try:
+            return df.query(global_where, engine='python')
+        except Exception as e:
+            self.log(f"Ошибка при query(): {e}. Пробуем альтернативный метод...", error=True)
+            return self._apply_where_manually(df, global_where)
+
+    def _close_connections(self) -> None:
+        """Закрытие всех активных подключений."""
+        for conn in self.connections.values():
+            if conn and not conn.closed:
+                try:
+                    conn.close()
+                    self.log(f"Закрыто подключение {conn}")
+                except Exception as e:
+                    self.log(f"Ошибка при закрытии подключения: {str(e)}", error=True)
+        self.connections.clear()
+
+    def parse_sql(self, query: str) -> Dict[str, Any]:
+        """Надежный парсер SQL с поддержкой JOIN и сложных запросов."""
         parsed = {
             'columns': [],
             'tables': set(),
             'aliases': {},
             'where': '',
             'select_all': False,
-            'joins': []  # Список для хранения условий JOIN
+            'joins': []
         }
-
 
         # Нормализуем пробелы
         normalized_query = re.sub(r'\s+', ' ', query).strip()
@@ -251,8 +723,8 @@ class VirtualFDWManager:
         return parsed
     
     @staticmethod
-    def _split_columns(columns_str):
-        """Надежный парсер колонок без регулярных выражений"""
+    def _split_columns(columns_str: str) -> List[str]:
+        """Надежный парсер колонок без регулярных выражений."""
         parts = []
         current = []
         in_quotes = False
@@ -277,250 +749,8 @@ class VirtualFDWManager:
         
         return parts
 
-    def execute_query(self, query):
-        print(f"Выполняем запрос: {query}")
-        print(f"Текущий маппинг таблиц: {self.table_mapping}")
-        start_time = time.time()
-        
-        try:
-            parsed = self.parse_sql(query)
-            print(f"Парсинг результата: {parsed}")
-            
-            # 1. Определение таблиц и их подключений
-            table_info = {}
-            for full_table in parsed['tables']:
-                if full_table not in self.table_mapping:
-                    # Поиск по имени таблицы без схемы
-                    table_name_only = full_table.split('.')[-1]
-                    candidates = [t for t in self.table_mapping.keys() if t.split('.')[-1] == table_name_only]
-                    
-                    if len(candidates) == 1:
-                        full_table = candidates[0]
-                    elif len(candidates) > 1:
-                        raise ValueError(f"Неоднозначное соответствие для таблицы '{full_table}': найдено несколько таблиц в маппинге ({', '.join(candidates)}). Уточните схему.")
-                    else:
-                        raise ValueError(f"Таблица '{full_table}' не найдена в маппинге")
-                
-                connection_name = self.table_mapping[full_table]
-                
-                # Разделяем на схему и таблицу
-                if '.' in full_table:
-                    schema, table_name = full_table.split('.', 1)
-                else:
-                    schema = 'public'
-                    table_name = full_table
-                
-                # Определяем алиас
-                alias = next((a for a, t in parsed['aliases'].items() if t == full_table), None)
-                if alias is None:
-                    alias = table_name
-                
-                table_info[full_table] = {
-                    'connection': connection_name,
-                    'schema': schema,
-                    'table_name': table_name,
-                    'alias': alias,
-                    'columns': []
-                }
-
-            # 2. Загрузка данных с учетом JOIN условий
-            dfs = {}
-            join_rules = self._get_applicable_join_rules(table_info)
-            
-            for full_table, info in table_info.items():
-                # Определяем условия WHERE для текущей таблицы
-                table_where = self._extract_table_where(parsed.get('where', ''), info['alias'])
-                
-                # Формируем SQL запрос для текущей таблицы
-                columns = self._get_columns_for_table(parsed['columns'], info['alias'], full_table)
-                cols = ', '.join(columns) if columns and columns != ['*'] else '*'
-                
-                sql = f"SELECT {cols} FROM {info['schema']}.{info['table_name']}"
-                
-                # Добавляем условия WHERE, если есть
-                conditions = []
-                if table_where:
-                    conditions.append(table_where)
-                
-                # Добавляем JOIN условия из предварительно настроенных правил
-                join_params = []
-                for rule in join_rules:
-                    if full_table in rule['tables']:
-                        for other_table in rule['tables']:
-                            if other_table != full_table and other_table in dfs:
-                                # Получаем значения для JOIN из уже загруженной таблицы
-                                join_key = rule['key']
-                                other_info = table_info[other_table]
-                                other_df = dfs[other_table]
-                                
-                                # Формируем имя колонки с префиксом алиаса
-                                other_col = f"{other_info['alias']}.{join_key}"
-                                if other_col in other_df.columns:
-                                    values = other_df[other_col].unique()
-                                    join_params.extend(values.tolist())
-                
-                # Если есть JOIN условия, добавляем их в запрос
-                if join_params:
-                    join_condition = f"{info['alias']}.{rule['key']} IN %s"
-                    conditions.append(join_condition)
-                
-                if conditions:
-                    sql += " WHERE " + " AND ".join(conditions)
-                
-                print(f"Выполняем запрос к {full_table}: {sql}")
-                
-                # Выполняем запрос
-                with self.get_connection(info['connection']).cursor() as cur:
-                    if join_params:
-                        # Для IN условий преобразуем список в кортеж
-                        params = (tuple(join_params),)
-                        cur.execute(sql, params)
-                    else:
-                        cur.execute(sql)
-                    
-                    df = pd.DataFrame(cur.fetchall(), columns=[desc[0] for desc in cur.description])
-                    # Добавляем префикс алиаса только если это не *
-                    if columns != ['*']:
-                        df.columns = [f"{info['alias']}.{col}" for col in df.columns]
-                    else:
-                        # Для * добавляем префикс ко всем колонкам
-                        df.columns = [f"{info['alias']}.{col}" for col in df.columns]
-                    
-                    info['columns'] = df.columns.tolist()
-                    dfs[full_table] = df
-
-            # 3. Объединение результатов
-            if len(dfs) == 1:
-                merged = next(iter(dfs.values()))
-            else:
-                # Определяем порядок объединения (по порядку в FROM)
-                tables_ordered = list(dfs.keys())
-                merged = dfs[tables_ordered[0]]
-                
-                for table in tables_ordered[1:]:
-                    join_on = self._get_join_keys(parsed, table_info, table, merged.columns)
-                    
-                    if join_on:
-                        print(f"Объединяем {table} по условиям: {join_on}")
-                        merged = pd.merge(
-                            merged,
-                            dfs[table],
-                            how='left',
-                            left_on=join_on['left_keys'],
-                            right_on=join_on['right_keys'],
-                            suffixes=('', '_DROP')
-                        )
-                        # Удаляем дублирующиеся колонки
-                        merged = merged[[c for c in merged.columns if not c.endswith('_DROP')]]
-                    else:
-                        # Используем предварительно настроенные правила JOIN
-                        join_found = False
-                        for rule in join_rules:
-                            if table in rule['tables']:
-                                # Находим общую таблицу для JOIN
-                                common_tables = [t for t in rule['tables'] if t in dfs and t != table]
-                                if common_tables:
-                                    common_table = common_tables[0]
-                                    join_key = rule['key']
-                                    
-                                    left_keys = [f"{table_info[common_table]['alias']}.{join_key}"]
-                                    right_keys = [f"{table_info[table]['alias']}.{join_key}"]
-                                    
-                                    print(f"Объединяем {table} по предварительному правилу JOIN: {rule}")
-                                    merged = pd.merge(
-                                        merged,
-                                        dfs[table],
-                                        how='left',
-                                        left_on=left_keys,
-                                        right_on=right_keys,
-                                        suffixes=('', '_DROP')
-                                    )
-                                    # Удаляем дублирующиеся колонки
-                                    merged = merged[[c for c in merged.columns if not c.endswith('_DROP')]]
-                                    join_found = True
-                                    break
-                        
-                        if not join_found:
-                            print(f"Явных условий JOIN для {table} не найдено, используем concat")
-                            merged = pd.concat([merged, dfs[table]], axis=1)
-
-            # 4. Фильтрация результатов после объединения
-            if not merged.empty and parsed.get('where'):
-                global_where = self._prepare_where_condition(parsed['where'], merged.columns)
-                print(f"Применяем глобальное условие WHERE: {global_where}")
-                
-                try:
-                    merged = merged.query(global_where, engine='python')
-                except Exception as e:
-                    print(f"Ошибка при query(): {e}. Пробуем альтернативный метод...")
-                    merged = self._apply_where_manually(merged, global_where)
-
-            # Финализация результата
-            merged = merged.fillna('NULL')
-            merged = merged.reset_index(drop=True)
-            
-            exec_time = time.time() - start_time
-            print(f"Запрос выполнен за {exec_time:.2f} сек. Результат: {len(merged)} строк")
-            return merged, exec_time
-
-        except Exception as e:
-            exec_time = time.time() - start_time
-            error_msg = f"{str(e)} (Время выполнения: {exec_time:.2f} сек.)"
-            print(f"Ошибка выполнения: {error_msg}")
-            raise RuntimeError(error_msg) from e
-        finally:
-            # Закрытие соединений
-            for conn in self.connections.values():
-                if conn and not conn.closed:
-                    conn.close()
-
-    def _prepare_join_conditions(self, parsed, table_info):
-        """Подготавливает условия JOIN для фильтрации данных перед объединением"""
-        join_conditions = defaultdict(list)
-        
-        for join in parsed.get('joins', []):
-            table = join['table']
-            condition = join['condition']
-            
-            # Получаем алиас присоединяемой таблицы
-            join_alias = join.get('alias') or table.split('.')[-1]
-            
-            # Находим основную таблицу (из FROM)
-            main_table_alias = next(iter(table_info.values()))['alias']
-            
-            # Парсим условие JOIN
-            comparisons = [c.strip() for c in re.split(r'\bAND\b|\bOR\b', condition, flags=re.IGNORECASE) if c.strip()]
-            for comp in comparisons:
-                if any(op in comp for op in ['=', '!=', '<', '>']):
-                    # Разделяем на левую и правую части
-                    for op in ['=', '!=', '<', '>']:
-                        if op in comp:
-                            left, right = [p.strip() for p in comp.split(op, 1)]
-                            break
-                    
-                    # Определяем какая часть относится к какой таблице
-                    if main_table_alias in left and join_alias in right:
-                        local_col = right.split('.')[-1]
-                        remote_col = left.split('.')[-1]
-                        op = op  # сохраняем оператор
-                    elif main_table_alias in right and join_alias in left:
-                        local_col = left.split('.')[-1]
-                        remote_col = right.split('.')[-1]
-                        # Инвертируем оператор если нужно
-                        op = {'=':'=', '!=':'!=', '<':'>', '>':'<'}[op]
-                    else:
-                        continue
-                    
-                    join_conditions[table].append({
-                        'local_column': local_col,
-                        'remote_column': remote_col,
-                        'operator': op
-                    })
-        
-        return join_conditions
-    
-    def _get_applicable_join_rules(self, table_info):
-        """Возвращает JOIN правила, применимые к текущим таблицам"""
+    def _get_applicable_join_rules(self, table_info: Dict[str, Dict[str, str]]) -> List[Dict[str, Any]]:
+        """Возвращает JOIN правила, применимые к текущим таблицам."""
         applicable_rules = []
         tables = list(table_info.keys())
         
@@ -531,8 +761,8 @@ class VirtualFDWManager:
         
         return applicable_rules
 
-    def _extract_table_where(self, where_clause, table_alias):
-        """Извлекает условия WHERE относящиеся к конкретной таблице"""
+    def _extract_table_where(self, where_clause: str, table_alias: str) -> str:
+        """Извлекает условия WHERE относящиеся к конкретной таблице."""
         if not where_clause:
             return ''
         
@@ -551,8 +781,8 @@ class VirtualFDWManager:
         
         return ' AND '.join(conditions)
 
-    def _get_columns_for_table(self, columns, table_alias, full_table):
-        """Определяет какие колонки запрашивать для конкретной таблицы"""
+    def _get_columns_for_table(self, columns: List[str], table_alias: str, full_table: str) -> List[str]:
+        """Определяет какие колонки запрашивать для конкретной таблицы."""
         result = []
         
         for col in columns:
@@ -571,8 +801,9 @@ class VirtualFDWManager:
         
         return result if result else ['*']
 
-    def _get_join_keys(self, parsed, table_info, current_table, available_columns):
-        """Определяет ключи для объединения таблиц"""
+    def _get_join_keys(self, parsed: Dict[str, Any], table_info: Dict[str, Dict[str, str]], 
+                      current_table: str, available_columns: List[str]) -> Optional[Dict[str, List[str]]]:
+        """Определяет ключи для объединения таблиц."""
         join_keys = {'left_keys': [], 'right_keys': []}
         current_alias = table_info[current_table]['alias']
         
@@ -599,43 +830,8 @@ class VirtualFDWManager:
         
         return join_keys if join_keys['left_keys'] else None
 
-    def _extract_join_conditions(self, parsed, current_alias, available_columns):
-        """Извлекает условия JOIN для текущей таблицы"""
-        join_conditions = {'left_keys': [], 'right_keys': []}
-        
-        for join in parsed.get('joins', []):
-            if join['table'].split('.')[-1] == current_alias or (join.get('alias') and join['alias'] == current_alias):
-                condition = join['condition']
-                comparisons = [c.strip() for c in re.split(r'\bAND\b|\bOR\b', condition, flags=re.IGNORECASE) if c.strip()]
-                
-                for comp in comparisons:
-                    if '=' in comp:
-                        left, right = [p.strip() for p in comp.split('=', 1)]
-                        
-                        # Определяем, какая часть относится к текущей таблице
-                        left_table = left.split('.')[0] if '.' in left else None
-                        right_table = right.split('.')[0] if '.' in right else None
-                        
-                        if left_table == current_alias and right in available_columns:
-                            join_conditions['right_keys'].append(left.split('.')[-1])
-                            join_conditions['left_keys'].append(right)
-                        elif right_table == current_alias and left in available_columns:
-                            join_conditions['left_keys'].append(left)
-                            join_conditions['right_keys'].append(right.split('.')[-1])
-        
-        return join_conditions if join_conditions['left_keys'] else None
-
-    def _parse_join_condition(self, condition):
-        """Парсит условие JOIN и возвращает пары (левая_колонка, правая_колонка)"""
-        comparisons = [c.strip() for c in re.split(r'\bAND\b|\bOR\b', condition, flags=re.IGNORECASE) if c.strip()]
-        for comp in comparisons:
-            if '=' in comp:
-                left, right = [p.strip() for p in comp.split('=', 1)]
-                return left, right
-        return None, None
-
-    def _prepare_where_condition(self, where_clause, available_columns):
-        """Подготавливает условие WHERE для использования в pandas"""
+    def _prepare_where_condition(self, where_clause: str, available_columns: List[str]) -> str:
+        """Подготавливает условие WHERE для использования в pandas."""
         # Создаем маппинг для замены имен колонок (удаляем префиксы таблиц)
         column_mapping = {}
         for col in available_columns:
@@ -667,8 +863,8 @@ class VirtualFDWManager:
         
         return where_clause
     
-    def _apply_where_manually(self, df, where_condition):
-        """Применяет условие WHERE вручную, если query() не сработал"""
+    def _apply_where_manually(self, df: pd.DataFrame, where_condition: str) -> pd.DataFrame:
+        """Применяет условие WHERE вручную, если query() не сработал."""
         # Удаляем префиксы таблиц из имен колонок
         where_condition = re.sub(r'\b\w+\.(\w+)\b', r'\1', where_condition)
         
@@ -694,14 +890,14 @@ class VirtualFDWManager:
                     col = cond.replace('.notna()', '').strip()
                     mask = mask & df[col].notna()
             except Exception as e:
-                print(f"Ошибка обработки условия {cond}: {str(e)}")
+                self.log(f"Ошибка обработки условия {cond}: {str(e)}", error=True)
                 continue
         
         return df[mask]
 
     @staticmethod
-    def _split_where_conditions(where_clause):  # <-- УБРАТЬ self
-        """Надежное разбиение условий WHERE без сложных регулярных выражений"""
+    def _split_where_conditions(where_clause: str) -> List[str]:
+        """Надежное разбиение условий WHERE без сложных регулярных выражений."""
         conditions = []
         current = []
         in_quotes = False
@@ -735,7 +931,8 @@ class VirtualFDWManager:
         # Фильтрация пустых условий
         return [c for c in conditions if c]
     
-    def query_database(self, connection_name, schema, table, columns):
+    def query_database(self, connection_name: str, schema: str, table: str, columns: List[str]) -> pd.DataFrame:
+        """Выполняет простой запрос к указанной таблице."""
         try:
             conn = self.get_connection(connection_name)
             cur = conn.cursor()
@@ -751,120 +948,8 @@ class VirtualFDWManager:
             cur.close()
             return df
         except Exception as e:
-            raise Exception(f"Ошибка при запросе к {schema}.{table}: {str(e)}")
+            self.log(f"Ошибка при запросе к {schema}.{table}: {str(e)}", error=True)
+            raise Exception(f"Ошибка при запросе к {schema}.{table}: {str(e)}") from e
+        
 
-    def _merge_tables(self, dfs, parsed):
-
-        """Объединяет таблицы согласно порядку в запросе и условиям JOIN"""
-        if not dfs:
-            return pd.DataFrame()
-        
-        # Если есть явные JOIN в запросе, используем их
-        if parsed.get('joins'):
-            base_table = list(parsed['tables'])[0]
-            merged = dfs[base_table]
-            
-            # Обрабатываем JOIN в порядке их указания в запросе
-            for join_info in parsed['joins']:
-                table_name = join_info['table']
-                alias = join_info['alias'] or table_name.split('.')[-1]
-                condition = join_info['condition']
-                
-                # Парсим условие JOIN
-                if '=' in condition:
-                    left_col, right_col = condition.split('=', 1)
-                    left_col = left_col.strip()
-                    right_col = right_col.strip()
-                    
-                    # Определяем таблицы для колонок
-                    left_table = base_table.split('.')[-1] if '.' in base_table else base_table
-                    right_table = table_name.split('.')[-1]
-                    
-                    # Форматируем имена колонок с префиксами таблиц
-                    left_col_full = f"{left_table}.{left_col.split('.')[-1]}" if '.' not in left_col else left_col
-                    right_col_full = f"{right_table}.{right_col.split('.')[-1]}" if '.' not in right_col else right_col
-                    
-                    # Выполняем JOIN
-                    try:
-                        merged = pd.merge(
-                            merged,
-                            dfs[table_name],
-                            left_on=left_col_full,
-                            right_on=right_col_full,
-                            how='inner'
-                        )
-                        # Обновляем базовую таблицу для следующего JOIN
-                        base_table = table_name
-                    except KeyError as e:
-                        self.log(f"Ошибка объединения: {str(e)}", error=True)
-                        continue
-            return merged
-        
-        """Объединяет таблицы согласно конфигурации JOIN"""
-        if not dfs:
-            return pd.DataFrame()
-        
-        # Создаем копию словаря таблиц для работы
-        remaining_dfs = dfs.copy()
-        merged_dfs = []
-        
-        # Применяем предопределенные правила JOIN
-        for rule in self.join_config:
-            try:
-                # Проверяем, есть ли все таблицы из правила в запросе
-                rule_tables = set(rule['tables'])
-                if not rule_tables.issubset(set(remaining_dfs.keys())):
-                    continue
-                
-                # Объединяем таблицы по правилу
-                base_table = rule['tables'][0]
-                merged = remaining_dfs[base_table]
-                
-                for table in rule['tables'][1:]:
-                    if table not in remaining_dfs:
-                        continue
-                        
-                    how = rule['join_type']
-                    # Формируем имя колонки для соединения
-                    join_key = rule['key']
-                    
-                    # Проверяем наличие ключа в обеих таблицах
-                    base_key = f"{base_table.split('.')[-1]}.{join_key}"
-                    table_key = f"{table.split('.')[-1]}.{join_key}"
-                    
-                    if base_key not in merged.columns:
-                        raise KeyError(f"Ключ {base_key} не найден в таблице {base_table}")
-                    if table_key not in remaining_dfs[table].columns:
-                        raise KeyError(f"Ключ {table_key} не найден в таблице {table}")
-                    
-                    merged = pd.merge(
-                        merged, 
-                        remaining_dfs[table], 
-                        left_on=base_key, 
-                        right_on=table_key, 
-                        how=how
-                    )
-                    # Удаляем объединенную таблицу
-                    del remaining_dfs[table]
-                
-                # Удаляем базовую таблицу
-                del remaining_dfs[base_table]
-                
-                # Добавляем объединенный результат
-                merged_dfs.append(merged)
-                
-            except Exception as e:
-                print(f"Ошибка объединения по правилу: {str(e)}")
-                continue
-        
-        # Объединяем все результаты
-        if merged_dfs and remaining_dfs:
-            final_merged = pd.concat(merged_dfs + list(remaining_dfs.values()), axis=1)
-        elif merged_dfs:
-            final_merged = pd.concat(merged_dfs, axis=1)
-        elif remaining_dfs:
-            final_merged = pd.concat(list(remaining_dfs.values()), axis=1)
-        else:
-            return pd.DataFrame()
-        
-        return final_merged
+    

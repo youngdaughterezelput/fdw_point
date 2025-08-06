@@ -27,13 +27,13 @@ class SQLText(scrolledtext.ScrolledText):
         # Регулярные выражения для элементов SQL
         patterns = [
             (r'\b(SELECT|FROM|WHERE|JOIN|INNER|LEFT|RIGHT|FULL|OUTER|'
-             r'GROUP BY|HAVING|ORDER BY|LIMIT|AS|AND|OR|NOT|NULL|'
-             r'INSERT|UPDATE|DELETE|CREATE|TABLE|INDEX|VIEW|'
-             r'EXISTS|BETWEEN|LIKE|IN|IS)\b', 'keyword'),
+            r'GROUP BY|HAVING|ORDER BY|LIMIT|AS|AND|OR|NOT|NULL|'
+            r'INSERT|UPDATE|DELETE|CREATE|TABLE|INDEX|VIEW|'
+            r'EXISTS|BETWEEN|LIKE|IN|IS)\b', 'keyword'),
             (r"'[^']*'", 'string'),
             (r'--.*$', 'comment'),
             (r'\b(COUNT|SUM|AVG|MIN|MAX)\b', 'function'),
-            (r'[=<>!+*/%-]', 'operator')
+            (r'[=<>!+*/%-;]', 'operator')  # Добавлена точка с запятой
         ]
 
         # Применяем подсветку
